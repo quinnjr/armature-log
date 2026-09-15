@@ -9,6 +9,10 @@ Earlier changes are recorded in the workspace [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped resolved versions of `log`, `once_cell`, `chrono`, `tracing`, `tracing-subscriber`, `colored`, `serde`, `serde_json`, and the dev-dependency `tokio` to their latest compatible releases as part of a workspace-wide dependency upgrade. Manifest requirements were already loose enough (`"0.4"`, `"3.1"`, `"1"`, etc.) that no `Cargo.toml` version bump was needed, and no source changes were required — the crate builds, clippy is clean, and all 34 tests plus 8 doctests pass unchanged against the upgraded dependency graph.
+
 ### Fixed
 
 - The colored Pretty format brackets the target, matching the documented layout — colors are on by default in `preset_development()`, so the documented form was the one nobody saw.
