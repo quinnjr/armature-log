@@ -9,6 +9,12 @@ Earlier changes are recorded in the workspace [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-17
+
+### Security
+
+- The Pretty and Compact formats escape CR, LF, tab, every other control character (including ANSI `ESC`) and Unicode bidi overrides in the target and message, so attacker-influenced log text can no longer forge extra log lines or rewrite an operator's terminal. JSON output already escaped control characters; a test now pins that.
+
 ## [0.2.3] - 2026-09-15
 
 ### Changed
