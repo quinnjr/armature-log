@@ -786,17 +786,17 @@ fn write_pretty<W: Write>(
         #[cfg(feature = "color")]
         if color {
             use colored::Colorize;
-            let _ = write!(w, "{} ", format!("[{}]", target).dimmed());
+            let _ = write!(w, "{} ", format!("[{}]", escape_text(target)).dimmed());
         } else {
-            let _ = write!(w, "[{}] ", target);
+            let _ = write!(w, "[{}] ", escape_text(target));
         }
 
         #[cfg(not(feature = "color"))]
-        let _ = write!(w, "[{}] ", target);
+        let _ = write!(w, "[{}] ", escape_text(target));
     }
 
     // Message
-    let _ = writeln!(w, "{}", message);
+    let _ = writeln!(w, "{}", escape_text(message));
 }
 
 fn log_compact_runtime(
@@ -830,10 +830,46 @@ fn write_compact<W: Write>(
     let _ = write!(w, "{} ", level.as_str().chars().next().unwrap_or('?'));
 
     if module_path && !target.is_empty() {
-        let _ = write!(w, "{}: ", target);
+        let _ = write!(w, "{}: ", escape_text(target));
     }
 
-    let _ = writeln!(w, "{}", message);
+    let _ = writeln!(w, "{}", escape_text(message));
+}
+
+/// Escape a target or message for the line-oriented Pretty and Compact
+/// formats.
+///
+/// Log lines routinely contain attacker-influenced text (paths, headers,
+/// usernames). Written verbatim, a CR/LF forges extra log lines and an ANSI
+/// escape (`ESC[...`) rewrites or hides what an operator's terminal shows. So
+/// `\n`, `\r` and `\t` become those two-character escapes, every other control
+/// character (C0, DEL, C1 -- including `ESC`) becomes `\u{..}`, and Unicode
+/// bidirectional overrides, which can visually reorder a line, are escaped
+/// the same way. The JSON format is already safe: `serde_json` (and the
+/// non-`json` fallback) escape every control character.
+fn escape_text(s: &str) -> std::borrow::Cow<'_, str> {
+    fn needs_escape(c: char) -> bool {
+        c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    }
+
+    if !s.chars().any(needs_escape) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if needs_escape(c) => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{{{:x}}}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn log_json(level: Level, target: &str, message: &str) {
@@ -1444,6 +1480,57 @@ mod tests {
         let out = String::from_utf8(buf).unwrap();
 
         assert_eq!(out, "D svc: message here\n");
+    }
+
+    /// CR/LF would forge extra log lines and ANSI escapes would rewrite the
+    /// operator's terminal; both must be neutralized in the text formats.
+    #[test]
+    fn text_formats_escape_crlf_ansi_and_control_chars() {
+        let evil_msg = "login ok\r\nINFO forged entry \x1b[2Jcleared\x07\u{202E}";
+        let evil_target = "svc\n[x]";
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_compact(&mut buf, Level::Info, evil_target, evil_msg, false, true);
+        let compact = String::from_utf8(buf).unwrap();
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_pretty(
+            &mut buf,
+            Level::Info,
+            evil_target,
+            evil_msg,
+            false,
+            false,
+            true,
+        );
+        let pretty = String::from_utf8(buf).unwrap();
+
+        for out in [&compact, &pretty] {
+            assert_eq!(out.matches('\n').count(), 1, "one line only: {out:?}");
+            assert!(out.ends_with('\n'));
+            assert!(!out.contains('\r'), "{out:?}");
+            assert!(!out.contains('\x1b'), "{out:?}");
+            assert!(!out.contains('\x07'), "{out:?}");
+            assert!(!out.contains('\u{202E}'), "{out:?}");
+            assert!(out.contains("login ok\\r\\nINFO forged entry \\u{1b}[2Jcleared"));
+        }
+        assert_eq!(
+            compact,
+            "I svc\\n[x]: login ok\\r\\nINFO forged entry \\u{1b}[2Jcleared\\u{7}\\u{202e}\n"
+        );
+        // Ordinary text is untouched (and not reallocated).
+        assert!(matches!(
+            escape_text("plain ünïcode"),
+            std::borrow::Cow::Borrowed("plain ünïcode")
+        ));
+    }
+
+    /// The JSON format escapes control characters on its own.
+    #[test]
+    fn json_format_escapes_control_chars() {
+        let line = render_json(Level::Info, "t", "a\r\nb\x1bc").unwrap();
+        assert!(!line.contains('\n') && !line.contains('\r') && !line.contains('\x1b'));
+        assert!(line.contains("a\\r\\nb\\u001bc"), "{line}");
     }
 
     #[test]
